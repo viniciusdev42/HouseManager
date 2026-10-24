@@ -11,13 +11,13 @@ Por fora,o House Manager é um gerenciador de tarefas: o usuário cria tarefas c
 O House Manager utiliza as seguintes estruturas de dados:
 
 1. `Hash Table`: Permite o **acesso direto** à tarefa pelo ID
-2. `Lista de Prioridades (Heap)`: Permite o **Agendamento de Tarefas**
+2. `Fila de Prioridade (Heap)`: Permite o **Agendamento de Tarefas**
 3. `Árvore AVL`: Permite **índices ordenados** (título,prazo,prioridade)
 4. `Árvore TRIE`: Permite a busca por **prefixo** e **autocomplete**
 5. `Processamento de Cadeia de Caracteres`: Permite a **normalização,a tokenização e a busca textual**.
-6. `Árvore B+ & Pager`: Permite a **persistência** e a **indexação em disco**
+6. `Árvore B`: Permite a **persistência** e a **indexação em disco**
 7. `Grafos`: Permite gerenciar a **dependência entre tarefas**,a **detecção de ciclos** e a **ordenação topológica**
-8. `Busca Digital`: Permite a busca baseada em **dígitos** (Digital Search Tree,Radix,Patricia)
+8. `Busca Digital`: Permite a busca baseada em **dígitos** (Digital Search Tree)
 
 ### Arquitetura
 
@@ -43,7 +43,7 @@ O House Manager segue os seguintes princípios:
 
 O Model representa os dados do domínio, aplica as regras de negócio e coordena o acesso aos dados necessários ao funcionamento do sistema. A suas responsabilidade são:
 
-1. Representar as entidades do domínio,como `Task`,`Group` e `Dependency`
+1. Representar as entidades do domínio,como `Task` e `Dependency`
 
 2. Aplicar e validar regras de negócio relacionadas às tarefas e às suas dependências
 
@@ -55,13 +55,11 @@ O Model representa os dados do domínio, aplica as regras de negócio e coordena
 
 6. Expor operações e resultados sem depender de elementos da interface gráfica
 
-Task,Group e Dependency são as entidades do domínio,representando os conceitos centrais do sistema. 
+Task e Dependency são as entidades do domínio,representando os principais conceitos do sistema. 
 
 Task representa uma tarefa,possuindo identificador,título,descrição,prioridade,prazo e estado.
 
-Group representa um agrupamento de tarefas.
-
-Dependency representa uma relação de dependência entre as tarefas.
+Dependency representa uma relação de dependência entre tarefas.
 
 #### View
 
@@ -99,7 +97,7 @@ O Controller não implementa as operações internas da AVL,TRIE,Hash Table ou q
 
 ### Framework
 
-O framework gráfico escolhido foi o **Qt6/Qt Widgets** devido a escolha de arquitetura e linguagem. O Qt permite desenvolver a interface gráfica sem a necessidade de introduzir outra linguagem principal no projeto. Além disso,os slots do Qt facilitam a comunicação entre a interface e os Controllers,sem exigir que as estruturas de dados dependam da GUI. Por fim,o Qt é fácil de ser integrado com o **CMake**,o que facilita a organização e compilação modular do projeto.
+O framework gráfico escolhido foi o **Qt6/Qt Widgets** devido a escolha de arquitetura e linguagem. O Qt permite desenvolver a interface gráfica sem a necessidade de introduzir outra linguagem principal no projeto. Além disso,os slots do Qt facilitam a comunicação entre a interface e o Controller,sem exigir que as estruturas de dados dependam da GUI. Por fim,o Qt é fácil de ser integrado com o **CMake**,o que facilita a organização e compilação modular do projeto.
 
 ### Estrutura
 

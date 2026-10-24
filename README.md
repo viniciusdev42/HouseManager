@@ -129,5 +129,3 @@ TaskManager/
 │   └── Integration/
 
 ```
-
-As principais decisões do projeto são tomadas com base nas **recomendações dos modelos**. Não estão incluídos modelos agênticos (Codex & Cowork) devido a questões de orçamento.

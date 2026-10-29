@@ -5,7 +5,7 @@
 #include <unordered_set>
 #include <utility>
 
-namespace housem::domain {
+namespace model {
 
 namespace {
 
@@ -223,4 +223,4 @@ void Project::touch() noexcept {
     }
 }
 
-}  // namespace housem::domain
+}  // namespace model

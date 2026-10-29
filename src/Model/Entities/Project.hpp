@@ -1,4 +1,5 @@
-#pragma once
+#ifndef TASKMANAGER_MODEL_ENTITIES_PROJECT_HPP
+#define TASKMANAGER_MODEL_ENTITIES_PROJECT_HPP
 
 #include <chrono>
 #include <cstddef>
@@ -8,7 +9,7 @@
 #include <string_view>
 #include <vector>
 
-namespace housem::domain {
+namespace model {
 
 // Aliases compartilhados com a camada de domínio. Redeclarações idênticas
 // (por exemplo, em Task.hpp) são válidas em C++.
@@ -136,4 +137,4 @@ private:
     std::vector<TaskId> taskIds_;
 };
 
-}  // namespace housem::domain
+}  // namespace model

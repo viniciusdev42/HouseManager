@@ -7,7 +7,7 @@
 
 #include "Model/Entities/Task.hpp"
 
-namespace model {
+namespace Entities::Dependency {
 
 /// Entidade que representa uma dependência entre duas tarefas.
 ///
@@ -89,18 +89,6 @@ private:
     TaskId dependentId_;
 };
 
-}  // namespace model
-
-namespace std {
-
-/// Permite usar Dependency como chave em contêineres baseados em hash.
-template <>
-struct hash<model::Dependency> {
-    std::size_t operator()(const model::Dependency& dependency) const noexcept {
-        return dependency.hashValue();
-    }
-};
-
-}  // namespace std
+}  // namespace Entities::Dependency
 
 #endif  // TASKMANAGER_MODEL_ENTITIES_DEPENDENCY_HPP

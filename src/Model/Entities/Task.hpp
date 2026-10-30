@@ -8,7 +8,7 @@
 #include <string>
 #include <string_view>
 
-namespace model {
+namespace Entities::Task {
 
 /// Identificador estável e único de uma tarefa.
 /// O valor 0 é reservado como "inválido". A geração de IDs é responsabilidade
@@ -126,6 +126,6 @@ private:
     Status status_;
 };
 
-}  // namespace model
+}  // namespace Entities::Task
 
 #endif  // TASKMANAGER_MODEL_ENTITIES_TASK_HPP

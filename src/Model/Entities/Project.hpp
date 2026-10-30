@@ -9,7 +9,7 @@
 #include <string_view>
 #include <vector>
 
-namespace model {
+namespace Entities::Project {
 
 // Aliases compartilhados com a camada de domínio. Redeclarações idênticas
 // (por exemplo, em Task.hpp) são válidas em C++.
@@ -137,4 +137,4 @@ private:
     std::vector<TaskId> taskIds_;
 };
 
-}  // namespace model
+}  // namespace Entities::Project

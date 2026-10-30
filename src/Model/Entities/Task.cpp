@@ -3,7 +3,7 @@
 #include <stdexcept>
 #include <utility>
 
-namespace model {
+namespace Entities::Task {
 
 namespace {
 
@@ -123,4 +123,4 @@ void Task::markAsCompleted() noexcept {
     status_ = Status::Completed;
 }
 
-}  // namespace model
+}  // namespace Entities::Task

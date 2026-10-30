@@ -2,7 +2,7 @@
 
 #include <stdexcept>
 
-namespace model {
+namespace Entities::Dependency {
 
 namespace {
 
@@ -48,4 +48,4 @@ std::string Dependency::toString() const {
     return std::to_string(prerequisiteId_) + " -> " + std::to_string(dependentId_);
 }
 
-}  // namespace model
+}  // namespace Entities::Dependency

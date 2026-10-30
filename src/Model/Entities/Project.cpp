@@ -5,7 +5,7 @@
 #include <unordered_set>
 #include <utility>
 
-namespace model {
+namespace Entities::Project {
 
 namespace {
 
@@ -223,4 +223,4 @@ void Project::touch() noexcept {
     }
 }
 
-}  // namespace model
+}  // namespace Entities::Project

@@ -13,7 +13,7 @@
 #include <utility>
 #include <vector>
 
-namespace Page::PageSystem {
+namespace PageSystem::Page{
 
 using PageId = std::uint32_t;
 using Byte = std::uint8_t;
@@ -305,4 +305,4 @@ private:
     std::vector<Byte> data_;
 };
 
-}  // namespace Page::PageSystem
+}  // namespace PageSystem::Page

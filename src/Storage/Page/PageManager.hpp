@@ -15,7 +15,7 @@
 #include <utility>
 #include <vector>
 
-namespace PageManager::PageSystem {
+namespace PageSystem::PageManager {
 
 struct IntegrityReport {
     std::size_t pagesChecked = 0;
@@ -237,4 +237,4 @@ private:
     std::set<PageId> freeIds_;
 };
 
-}  // namespace PageManager::PageSystem
+}  // namespace PageSystem::PageManager

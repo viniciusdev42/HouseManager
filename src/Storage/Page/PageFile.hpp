@@ -20,7 +20,7 @@
 #include <system_error>
 #include <vector>
 
-namespace PageFile::PageSystem {
+namespace PageSystem::PageFile{
 
 class PageFile {
 public:
@@ -305,4 +305,4 @@ private:
     std::fstream stream_;
 };
 
-}  // namespace PageFile::PageSystem
+}  // namespace PageSystem::PageFile

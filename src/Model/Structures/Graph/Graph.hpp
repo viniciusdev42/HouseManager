@@ -10,7 +10,7 @@
 #include <utility>
 #include <vector>
 
-namespace Structures::Graph {
+namespace Graph {
 
 enum class GraphType { Directed, Undirected };
 
@@ -314,6 +314,6 @@ private:
     std::size_t edgeCount_ = 0;
 };
 
-}  // namespace Structures::Graph
+}  // namespace Graph
 
 #endif  // STRUCTURES_GRAPH

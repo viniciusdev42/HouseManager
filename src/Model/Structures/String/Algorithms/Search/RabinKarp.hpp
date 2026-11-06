@@ -26,7 +26,7 @@
  *   - Os bytes são tratados como unsigned char, então funciona com qualquer
  *     codificação de 8 bits (ASCII, UTF-8 comparado byte a byte, etc.).
  */
-namespace Algorithms::RabinKarp {
+namespace Algorithms {
 
 namespace RabinKarp::Detail {
 
@@ -127,6 +127,6 @@ inline std::optional<std::size_t> find_first(std::string_view text, std::string_
     return first_position;
 }
 
-}  // namespace Algorithms::RabinKarp
+}  // namespace Algorithms
 
 #endif  //  ALGORITHMS_RABIN_KARP_HPP

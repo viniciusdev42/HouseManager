@@ -14,7 +14,7 @@
  *
  * Requer C++17 (std::string_view).
  */
-namespace Algorithms::KMP {
+namespace Algorithms {
 
 /**
  * Pré-processamento: constrói a tabela LPS (Longest Proper Prefix which is
@@ -96,6 +96,6 @@ inline std::vector<std::size_t> search(std::string_view text,
     return occurrences;
 }
 
-}  // namespace Algorithms::KMP
+}  // namespace Algorithms
 
 #endif  // ALGORITHMS_KMP

@@ -28,7 +28,7 @@
  * Observação: a comparação é feita byte a byte (alfabeto de 256 símbolos).
  * Para texto UTF-8, a busca é correta em nível de bytes.
  */
-namespace Algorithms::BoyerMoore {
+namespace Algorithms {
 
 class BoyerMoore {
 public:
@@ -186,6 +186,6 @@ private:
     return BoyerMoore(pattern).find_all(text);
 }
 
-}  // namespace bm
+}  // namespace Algorithms
 
 #endif  //  ALGORITHMS_BOYER_MOORE

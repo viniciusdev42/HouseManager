@@ -41,7 +41,7 @@
 #include <utility>
 #include <vector>
 
-namespace text {
+namespace Normalizer  {
 
 // -----------------------------------------------------------------------------
 // Erros
@@ -771,6 +771,6 @@ private:
     std::vector<std::unique_ptr<INormalizationStep>> steps_;
 };
 
-}  // namespace text
+}  // namespace Normalizer 
 
 #endif  // STRING_NORMALIZER

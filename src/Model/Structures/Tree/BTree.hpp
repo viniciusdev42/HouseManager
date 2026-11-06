@@ -12,7 +12,7 @@
 #include <utility>
 #include <vector>
 
-namespace BTree {
+namespace BTree::Page  {
 
 // ======================================================================
 // Contrato com o Sistema de Páginas
@@ -673,6 +673,6 @@ private:
     }
 };
 
-}  // namespace BTree
+}  // namespace BTree::Page 
 
 #endif  // STRUCTURES_BTRE_HPP

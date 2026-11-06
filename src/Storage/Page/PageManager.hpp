@@ -1,3 +1,4 @@
+#ifndef STORAGE_PAGER_MANAGER_HPP
 #define STORAGE_PAGER_MANAGER_HPP
 
 // PageManager.hpp
@@ -89,9 +90,9 @@ public:
 
     // --- Operações ------------------------------------------------------------
 
-    // Reaproveita a página livre de menor id; se não houver, adiciona uma ao fim do arquivo.
+   // Reaproveita a página livre de menor id; se não houver, adiciona uma ao fim do arquivo.
     // A nova página nasce não inicializada.
-    PageId createPage() {
+    PageId allocatePage() {
         states_.reserve(states_.size() + 1);  // evita falha de alocação depois da escrita em disco
 
         if (!freeIds_.empty()) {
@@ -107,6 +108,7 @@ public:
         states_.push_back(PageState::Allocated);
         return id;
     }
+
 
     // Retorna uma cópia da página. Páginas livres não podem ser recuperadas.
     Page getPage(PageId id) {
@@ -144,19 +146,38 @@ public:
         updatePage(id, offset, content.data(), content.size());
     }
 
-    // Libera a página, zerando seu conteúdo. Liberar duas vezes é uma operação inválida.
+    // Libera a página, zerando seu conteúdo. Liberar duas vezes é uma operação inválida,
+    // assim como liberar a página raiz: remova a raiz antes com setRootPageId(kInvalidPageId).
     void freePage(PageId id) {
         validatePageId(id);
         if (states_[id] == PageState::Free) {
             throw PageError(ErrorCode::InvalidOperation,
                             "página " + std::to_string(id) + " já está livre");
         }
+        if (id == file_.rootPageId()) {
+            throw PageError(ErrorCode::InvalidOperation,
+                            "página " + std::to_string(id) +
+                                " é a raiz; defina outra raiz ou remova-a antes de liberar");
+        }
         file_.writePage(Page(id, pageSize(), PageState::Free));
         states_[id] = PageState::Free;
         freeIds_.insert(id);
     }
 
-    // --- Integridade ----------------------------------------------------------
+    // Retorna kInvalidPageId quando nenhuma raiz foi definida.
+    PageId getRootPageId() const noexcept { return file_.rootPageId(); }
+
+    bool hasRootPage() const noexcept { return file_.rootPageId() != kInvalidPageId; }
+
+    // A raiz deve ser uma página em uso; kInvalidPageId remove a raiz.
+    void setRootPageId(PageId id) {
+        if (id != kInvalidPageId) {
+            requireInUse(id, "definição de raiz");
+        }
+        file_.setRootPageId(id);
+    }
+
+     // --- Integridade ----------------------------------------------------------
 
     // Confere a estrutura do arquivo, o checksum de cada página e a consistência
     // entre a tabela de estados em memória e o que está gravado.
@@ -184,6 +205,15 @@ public:
                 }
             } catch (const PageError& error) {
                 report.problems.push_back("página " + std::to_string(id) + ": " + error.what());
+            }
+        }
+
+        const PageId root = file_.rootPageId();
+        if (root != kInvalidPageId) {
+            if (!isValidPageId(root)) {
+                report.problems.push_back("página raiz " + std::to_string(root) + " não existe");
+            } else if (states_[root] == PageState::Free) {
+                report.problems.push_back("página raiz " + std::to_string(root) + " está livre");
             }
         }
 
@@ -238,3 +268,5 @@ private:
 };
 
 }  // namespace PageSystem::PageManager
+
+#endif // STORAGE_PAGER_MANAGER_HPP

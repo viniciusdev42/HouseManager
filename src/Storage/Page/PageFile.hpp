@@ -1,3 +1,4 @@
+#ifndef STORAGE_PAGE_FILE_HPP
 #define STORAGE_PAGE_FILE_HPP
 
 // PageFile.hpp
@@ -9,7 +10,8 @@
 // Cada página ocupa Page::kHeaderSize + pageSize bytes.
 //
 // Cabeçalho do arquivo (little-endian):
-//   magic | versão | pageSize | pageCount | reservado | checksum dos 20 bytes anteriores
+//   magic | versão | pageSize | pageCount | rootPageId | checksum dos 20 bytes anteriores
+// rootPageId vale kInvalidPageId quando não há página raiz definida.
 
 #include "Page.hpp"
 
@@ -20,12 +22,15 @@
 #include <system_error>
 #include <vector>
 
-namespace PageSystem::PageFile{
+namespace PageSystem::PageFile  {
 
 class PageFile {
 public:
     static constexpr std::uint32_t kMagic = 0x31464750u;  // "PGF1"
-    static constexpr std::uint32_t kVersion = 1;
+    static constexpr std::uint32_t kVersion = 2;
+    // A versão 1 tinha esse campo reservado (sempre 0); é aberta como "sem raiz"
+    // e passa a versão 2 na próxima gravação do cabeçalho.
+    static constexpr std::uint32_t kLegacyVersion = 1;
     static constexpr std::size_t kFileHeaderSize = 24;
 
     PageFile(const PageFile&) = delete;
@@ -53,7 +58,7 @@ public:
                             "o arquivo já existe: " + path.string());
         }
 
-        PageFile file(path, pageSize, 0);
+        PageFile file(path, pageSize, 0, kInvalidPageId);
         file.stream_.open(path, std::ios::in | std::ios::out | std::ios::binary | std::ios::trunc);
         if (!file.stream_.is_open()) {
             throw PageError(ErrorCode::IoError, "não foi possível criar o arquivo: " + path.string());
@@ -97,7 +102,13 @@ public:
                             "tamanho do arquivo incompatível com o número de páginas declarado");
         }
 
-        PageFile file(path, header.pageSize, header.pageCount);
+        if (header.rootPageId != kInvalidPageId && header.rootPageId >= header.pageCount) {
+            throw PageError(ErrorCode::FileCorrupted,
+                            "página raiz " + std::to_string(header.rootPageId) +
+                                " fora do intervalo de páginas do arquivo");
+        }
+
+        PageFile file(path, header.pageSize, header.pageCount, header.rootPageId);
         file.stream_ = std::move(stream);
         return file;
     }
@@ -106,6 +117,7 @@ public:
     std::uint32_t pageSize() const noexcept { return pageSize_; }
     PageId pageCount() const noexcept { return pageCount_; }
     bool isOpen() const noexcept { return stream_.is_open(); }
+    PageId rootPageId() const noexcept { return rootPageId_; }
 
     // Lê uma página completa, validando assinatura, id e checksum.
     Page readPage(PageId id) {
@@ -161,13 +173,30 @@ public:
         }
     }
 
+    // Define a página raiz e grava o cabeçalho. kInvalidPageId remove a raiz.
+    void setRootPageId(PageId id) {
+        requireOpen();
+        if (id != kInvalidPageId) {
+            requireExistingId(id);
+        }
+        const PageId previous = rootPageId_;
+        rootPageId_ = id;
+        try {
+            writeFileHeader();
+        } catch (...) {
+            rootPageId_ = previous;
+            throw;
+        }
+    }
+
     // Reconfere no disco o cabeçalho e o tamanho do arquivo.
     void verifyStructure() {
         requireOpen();
         Byte buffer[kFileHeaderSize];
         readAt(0, buffer, sizeof(buffer));
         const FileHeader header = parseFileHeader(buffer);
-        if (header.pageSize != pageSize_ || header.pageCount != pageCount_) {
+        if (header.pageSize != pageSize_ || header.pageCount != pageCount_ ||
+            header.rootPageId != rootPageId_) {
             throw PageError(ErrorCode::FileCorrupted,
                             "cabeçalho em disco diverge do estado em memória");
         }
@@ -209,10 +238,15 @@ private:
         std::uint32_t version;
         std::uint32_t pageSize;
         std::uint32_t pageCount;
+        PageId rootPageId;
     };
 
-    PageFile(std::filesystem::path path, std::uint32_t pageSize, PageId pageCount)
-        : path_(std::move(path)), pageSize_(pageSize), pageCount_(pageCount) {}
+    PageFile(std::filesystem::path path, std::uint32_t pageSize, PageId pageCount,
+             PageId rootPageId)
+        : path_(std::move(path)),
+          pageSize_(pageSize),
+          pageCount_(pageCount),
+          rootPageId_(rootPageId) {}
 
     static std::uintmax_t expectedFileSize(std::uint32_t pageSize, PageId pageCount) noexcept {
         const std::uintmax_t slot = Page::kHeaderSize + pageSize;
@@ -230,7 +264,9 @@ private:
         header.version = detail::getU32(buffer + 4);
         header.pageSize = detail::getU32(buffer + 8);
         header.pageCount = detail::getU32(buffer + 12);
-        if (header.version != kVersion) {
+        header.rootPageId = (header.version == kLegacyVersion) ? kInvalidPageId
+                                                                : detail::getU32(buffer + 16);
+        if (header.version != kVersion && header.version != kLegacyVersion) {
             throw PageError(ErrorCode::FileCorrupted,
                             "versão de arquivo não suportada: " + std::to_string(header.version));
         }
@@ -246,7 +282,7 @@ private:
         detail::putU32(buffer + 4, kVersion);
         detail::putU32(buffer + 8, pageSize_);
         detail::putU32(buffer + 12, pageCount_);
-        detail::putU32(buffer + 16, 0);
+        detail::putU32(buffer + 16, rootPageId_);
         detail::putU32(buffer + 20, detail::fnv1a(buffer, 20));
         writeAt(0, buffer, sizeof(buffer));
     }
@@ -302,7 +338,10 @@ private:
     std::filesystem::path path_;
     std::uint32_t pageSize_;
     PageId pageCount_;
+    PageId rootPageId_;
     std::fstream stream_;
 };
 
-}  // namespace PageSystem::PageFile
+}  // namespace PageSystem::PageFile 
+
+#endif // STORAGE_PAGE_FILE_HPP

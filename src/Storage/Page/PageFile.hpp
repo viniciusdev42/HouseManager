@@ -22,7 +22,7 @@
 #include <system_error>
 #include <vector>
 
-namespace PageSystem {
+namespace PageSystem  {
 
 class PageFile {
 public:
@@ -342,6 +342,6 @@ private:
     std::fstream stream_;
 };
 
-}  // namespace PageSystem
+}  // namespace PageSystem 
 
-#endif // STORAGE_PAGE_FILE_HPP
+#endif

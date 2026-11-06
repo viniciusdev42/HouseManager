@@ -1,8 +1,8 @@
-#ifndef STORAGE_PAGER_MANAGER_HPP
-#define STORAGE_PAGER_MANAGER_HPP
+#ifndef STORAGE_PAGE_MANAGER_HPP
+#define STORAGE_PAGE_MANAGER_HPP
 
 // PageManager.hpp
-// Gerencia o ciclo de vida das páginas (criar, recuperar, atualizar, liberar)
+// Gerencia o ciclo de vida das páginas (alocar, recuperar, atualizar, liberar)
 // sobre um PageFile. Mantém em memória apenas uma tabela de estados por página;
 // o conteúdo é sempre lido e gravado diretamente no arquivo (write-through).
 
@@ -16,7 +16,7 @@
 #include <utility>
 #include <vector>
 
-namespace PageSystem {
+namespace PageSystem  {
 
 struct IntegrityReport {
     std::size_t pagesChecked = 0;
@@ -90,7 +90,7 @@ public:
 
     // --- Operações ------------------------------------------------------------
 
-   // Reaproveita a página livre de menor id; se não houver, adiciona uma ao fim do arquivo.
+    // Reaproveita a página livre de menor id; se não houver, adiciona uma ao fim do arquivo.
     // A nova página nasce não inicializada.
     PageId allocatePage() {
         states_.reserve(states_.size() + 1);  // evita falha de alocação depois da escrita em disco
@@ -164,6 +164,9 @@ public:
         freeIds_.insert(id);
     }
 
+    // --- Página raiz ----------------------------------------------------------
+    // A raiz é persistida no cabeçalho do arquivo e sobrevive ao fechamento da aplicação.
+
     // Retorna kInvalidPageId quando nenhuma raiz foi definida.
     PageId getRootPageId() const noexcept { return file_.rootPageId(); }
 
@@ -177,7 +180,7 @@ public:
         file_.setRootPageId(id);
     }
 
-     // --- Integridade ----------------------------------------------------------
+    // --- Integridade ----------------------------------------------------------
 
     // Confere a estrutura do arquivo, o checksum de cada página e a consistência
     // entre a tabela de estados em memória e o que está gravado.
@@ -267,6 +270,6 @@ private:
     std::set<PageId> freeIds_;
 };
 
-}  // namespace PageSystem
+}  // namespace PageSystem 
 
-#endif // STORAGE_PAGER_MANAGER_HPP
+#endif

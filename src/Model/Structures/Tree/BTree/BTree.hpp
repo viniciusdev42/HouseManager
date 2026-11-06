@@ -3,34 +3,106 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <iterator>
-#include <memory>
+#include <limits>
 #include <optional>
 #include <stdexcept>
 #include <utility>
 #include <vector>
 
+namespace BTree::Page  {
+
+// ======================================================================
+// Contrato com o Sistema de Páginas
+// ======================================================================
+
+/** Identificador de uma página gerenciada pelo Sistema de Páginas. */
+using PageId = std::uint64_t;
+
+/** Valor reservado para "nenhuma página" (árvore vazia, ausência de filho). */
+inline constexpr PageId kNullPageId = std::numeric_limits<PageId>::max();
+
 /**
- * Árvore B (mapa ordenado chave -> valor, sem chaves duplicadas).
+ * Representação em memória de um nó da Árvore B.
+ *
+ * Os filhos são referenciados por PageId (e não por ponteiros), pois cada nó
+ * vive em uma página. A serialização deste struct para os bytes da página é
+ * responsabilidade exclusiva do Sistema de Páginas.
+ */
+template <typename Key, typename Value>
+struct BTreeNode {
+    PageId pageId = kNullPageId;               // página onde o nó está persistido
+    bool leaf = true;
+    std::vector<std::pair<Key, Value>> entries;  // ordenadas por chave
+    std::vector<PageId> children;                // entries.size() + 1 se interno
+};
+
+/**
+ * Interface que a Árvore B exige do Sistema de Páginas (Inversão de
+ * Dependência): a árvore conhece apenas este contrato e nunca acessa arquivos.
+ *
+ * Para integrar o Sistema de Páginas existente, implemente esta interface
+ * diretamente nele ou em um adaptador que delegue as chamadas.
+ *
+ * Todos os métodos podem lançar exceção em caso de falha de E/S; a Árvore B
+ * não captura nem mascara esses erros.
+ */
+template <typename Key, typename Value>
+class PageStorage {
+public:
+    using Node = BTreeNode<Key, Value>;
+
+    virtual ~PageStorage() = default;
+
+    /** Recupera o nó armazenado na página pageId (retorna uma cópia em memória). */
+    virtual Node loadNode(PageId pageId) = 0;
+
+    /** Persiste o nó na página node.pageId. */
+    virtual void writeNode(const Node& node) = 0;
+
+    /** Solicita uma nova página para um nó e retorna seu identificador. */
+    virtual PageId allocateNode() = 0;
+
+    /** Libera a página de um nó que foi removido da árvore. */
+    virtual void freeNode(PageId pageId) = 0;
+
+    /** Identificador da página raiz, ou kNullPageId se a árvore estiver vazia. */
+    virtual PageId getRootPageId() const = 0;
+
+    /** Atualiza a referência da raiz (kNullPageId para árvore vazia). */
+    virtual void setRootPageId(PageId pageId) = 0;
+};
+
+// ======================================================================
+// Árvore B
+// ======================================================================
+
+/**
+ * Árvore B persistente (mapa ordenado chave -> valor, sem chaves duplicadas).
+ *
+ * Todo acesso a nós passa pelo PageStorage injetado: a árvore carrega um nó
+ * (loadNode), modifica a cópia em memória e a persiste (writeNode). Nenhum
+ * estado da estrutura é mantido na árvore além da referência ao storage, então
+ * várias instâncias sobre o mesmo storage enxergam a mesma árvore.
  *
  * Parâmetros de template:
  *   Key        Tipo da chave (copiável e comparável via Compare).
- *   Value      Tipo do valor (copiável; a cópia ocorre apenas na remoção de
- *              nós internos, quando o predecessor/sucessor substitui a chave).
+ *   Value      Tipo do valor (copiável).
  *   MinDegree  Grau mínimo "t" (t >= 2). Cada nó, exceto a raiz, possui entre
- *              t-1 e 2t-1 chaves; um nó interno possui entre t e 2t filhos.
+ *              t-1 e 2t-1 chaves. Escolha t de modo que um nó com 2t-1 entradas
+ *              e 2t PageIds caiba em uma página do Sistema de Páginas
+ *              (veja kMaxEntries e kMaxChildren).
  *   Compare    Relação de ordem estrita (padrão: std::less<Key>).
  *
- * Complexidade (n = número de chaves, k = tamanho do resultado):
- *   search / insert / update / remove ..... O(t * log_t n)
- *   min / max ............................. O(log_t n)
- *   range_query ........................... O(log_t n + k)
- *   in_order / to_vector .................. O(n)
+ * Complexidade em páginas acessadas (n = chaves, k = tamanho do resultado):
+ *   search / insert / update / remove / min / max ... O(log_t n)
+ *   range_query .................................... O(log_t n + k/t)
+ *   in_order / to_vector / size / clear ............ O(n/t)
  *
- * A inserção divide nós cheios preventivamente (top-down) e a remoção garante
- * que todo nó visitado tenha ao menos t chaves antes de descer, de modo que
- * nenhuma operação precisa subir novamente pela árvore.
+ * Observação: a árvore não garante atomicidade entre várias escritas de uma
+ * mesma operação; isso deve ser tratado pelo Sistema de Páginas (ex.: log).
  */
 template <typename Key,
           typename Value,
@@ -44,54 +116,58 @@ public:
     using mapped_type = Value;
     using value_type  = std::pair<Key, Value>;
     using size_type   = std::size_t;
+    using Node        = BTreeNode<Key, Value>;
+    using Storage     = PageStorage<Key, Value>;
 
-    explicit BTree(Compare comp = Compare()) : comp_(std::move(comp)) {}
+    static constexpr std::size_t kMinDegree   = MinDegree;
+    static constexpr std::size_t kMaxEntries  = 2 * MinDegree - 1;
+    static constexpr std::size_t kMaxChildren = 2 * MinDegree;
 
-    // Copiar uma árvore exigiria clonagem profunda; fica fora do escopo.
+    /** O storage deve sobreviver à árvore; a árvore não é dona dele. */
+    explicit BTree(Storage& storage, Compare comp = Compare())
+        : storage_(storage), comp_(std::move(comp)) {}
+
     BTree(const BTree&) = delete;
     BTree& operator=(const BTree&) = delete;
-
-    BTree(BTree&& other) noexcept
-        : comp_(std::move(other.comp_)),
-          root_(std::move(other.root_)),
-          size_(std::exchange(other.size_, 0)) {}
-
-    BTree& operator=(BTree&& other) noexcept {
-        if (this != &other) {
-            comp_ = std::move(other.comp_);
-            root_ = std::move(other.root_);
-            size_ = std::exchange(other.size_, 0);
-        }
-        return *this;
-    }
-
-    ~BTree() = default;
 
     // ------------------------------------------------------------------
     // Informações gerais
     // ------------------------------------------------------------------
 
-    size_type size() const noexcept { return size_; }
-    bool empty() const noexcept { return size_ == 0; }
+    bool empty() const { return storage_.getRootPageId() == kNullPageId; }
 
-    void clear() noexcept {
-        root_.reset();
-        size_ = 0;
+    /** Número de chaves. Custo O(n/t) páginas, pois a contagem não é persistida. */
+    size_type size() const {
+        size_type count = 0;
+        in_order([&count](const Key&, const Value&) { ++count; });
+        return count;
+    }
+
+    /** Remove todas as chaves e libera todas as páginas da árvore. */
+    void clear() {
+        const PageId root_id = storage_.getRootPageId();
+        if (root_id == kNullPageId) {
+            return;
+        }
+        // A raiz é desvinculada antes de liberar as páginas, para que a
+        // árvore nunca aponte para uma página já liberada.
+        storage_.setRootPageId(kNullPageId);
+        release_subtree(root_id);
     }
 
     // ------------------------------------------------------------------
     // Busca
     // ------------------------------------------------------------------
 
-    bool contains(const Key& key) const { return locate(key) != nullptr; }
+    bool contains(const Key& key) const { return locate(key).has_value(); }
 
     /** Retorna o valor associado à chave, ou std::nullopt se não existir. */
     std::optional<Value> search(const Key& key) const {
-        const value_type* entry = locate(key);
-        if (entry == nullptr) {
+        std::optional<Location> location = locate(key);
+        if (!location) {
             return std::nullopt;
         }
-        return entry->second;
+        return std::move(location->node.entries[location->index].second);
     }
 
     // ------------------------------------------------------------------
@@ -106,23 +182,12 @@ public:
     bool insert(Key key, Value value) {
         // A verificação prévia permite que a descida de inserção assuma
         // chaves únicas e nunca precise desfazer divisões de nós.
-        if (locate(key) != nullptr) {
+        if (locate(key)) {
             return false;
         }
 
-        if (!root_) {
-            root_ = std::make_unique<Node>(true);
-        }
-
-        if (is_full(*root_)) {
-            auto new_root = std::make_unique<Node>(false);
-            new_root->children.push_back(std::move(root_));
-            split_child(*new_root, 0);
-            root_ = std::move(new_root);
-        }
-
-        insert_non_full(*root_, value_type(std::move(key), std::move(value)));
-        ++size_;
+        Node root = prepare_root_for_insertion();
+        insert_non_full(std::move(root), value_type(std::move(key), std::move(value)));
         return true;
     }
 
@@ -132,11 +197,12 @@ public:
 
     /** Substitui o valor de uma chave existente. Retorna false se ela não existir. */
     bool update(const Key& key, Value new_value) {
-        value_type* entry = locate(key);
-        if (entry == nullptr) {
+        std::optional<Location> location = locate(key);
+        if (!location) {
             return false;
         }
-        entry->second = std::move(new_value);
+        location->node.entries[location->index].second = std::move(new_value);
+        storage_.writeNode(location->node);
         return true;
     }
 
@@ -146,23 +212,19 @@ public:
 
     /** Remove a chave. Retorna false se ela não existir. */
     bool remove(const Key& key) {
-        if (!root_) {
+        const PageId root_id = storage_.getRootPageId();
+        if (root_id == kNullPageId) {
             return false;
         }
 
-        const bool removed = remove_from(*root_, key);
-        if (removed) {
-            --size_;
-        }
+        Node root = load_node(root_id);
+        const bool removed = remove_from(root, key);
 
         // A única forma de a árvore perder altura é a raiz ficar sem chaves.
-        if (root_->entries.empty()) {
-            if (root_->leaf) {
-                root_.reset();
-            } else {
-                std::unique_ptr<Node> only_child = std::move(root_->children.front());
-                root_ = std::move(only_child);
-            }
+        // Isso pode ocorrer mesmo sem remoção: a descida funde filhos
+        // preventivamente, ainda que a chave acabe não sendo encontrada.
+        if (root.entries.empty()) {
+            release_empty_root(root);
         }
         return removed;
     }
@@ -173,18 +235,20 @@ public:
 
     /** Menor par (chave, valor), ou std::nullopt se a árvore estiver vazia. */
     std::optional<value_type> min() const {
-        if (!root_) {
+        const PageId root_id = storage_.getRootPageId();
+        if (root_id == kNullPageId) {
             return std::nullopt;
         }
-        return min_entry(*root_);
+        return min_entry(load_node(root_id));
     }
 
     /** Maior par (chave, valor), ou std::nullopt se a árvore estiver vazia. */
     std::optional<value_type> max() const {
-        if (!root_) {
+        const PageId root_id = storage_.getRootPageId();
+        if (root_id == kNullPageId) {
             return std::nullopt;
         }
-        return max_entry(*root_);
+        return max_entry(load_node(root_id));
     }
 
     // ------------------------------------------------------------------
@@ -202,8 +266,9 @@ public:
         }
 
         std::vector<value_type> result;
-        if (root_) {
-            collect_range(*root_, lower, upper, result);
+        const PageId root_id = storage_.getRootPageId();
+        if (root_id != kNullPageId) {
+            collect_range(load_node(root_id), lower, upper, result);
         }
         return result;
     }
@@ -218,15 +283,15 @@ public:
      */
     template <typename Visitor>
     void in_order(Visitor&& visit) const {
-        if (root_) {
-            in_order_impl(*root_, visit);
+        const PageId root_id = storage_.getRootPageId();
+        if (root_id != kNullPageId) {
+            in_order_impl(load_node(root_id), visit);
         }
     }
 
     /** Todos os pares em ordem crescente de chave. */
     std::vector<value_type> to_vector() const {
         std::vector<value_type> result;
-        result.reserve(size_);
         in_order([&result](const Key& key, const Value& value) {
             result.emplace_back(key, value);
         });
@@ -234,25 +299,32 @@ public:
     }
 
 private:
-    static constexpr std::size_t kMinDegree  = MinDegree;
-    static constexpr std::size_t kMaxEntries = 2 * MinDegree - 1;
-
-    struct Node {
-        explicit Node(bool is_leaf) : leaf(is_leaf) {
-            entries.reserve(kMaxEntries);
-            if (!is_leaf) {
-                children.reserve(kMaxEntries + 1);
-            }
-        }
-
-        bool leaf;
-        std::vector<value_type> entries;              // ordenadas por chave
-        std::vector<std::unique_ptr<Node>> children;  // entries.size() + 1 se interno
+    /** Resultado de uma busca: o nó carregado e a posição da chave nele. */
+    struct Location {
+        Node node;
+        std::size_t index;
     };
 
+    Storage& storage_;
     Compare comp_;
-    std::unique_ptr<Node> root_;
-    size_type size_ = 0;
+
+    // ------------------------------------------------------------------
+    // Acesso a páginas (único ponto de contato com o Sistema de Páginas)
+    // ------------------------------------------------------------------
+
+    Node load_node(PageId page_id) const { return storage_.loadNode(page_id); }
+
+    /** Cria um nó vazio já associado a uma página recém-alocada (ainda não escrita). */
+    Node create_node(bool leaf) {
+        Node node;
+        node.pageId = storage_.allocateNode();
+        node.leaf   = leaf;
+        node.entries.reserve(kMaxEntries);
+        if (!leaf) {
+            node.children.reserve(kMaxChildren);
+        }
+        return node;
+    }
 
     // ------------------------------------------------------------------
     // Utilitários de nó
@@ -273,40 +345,55 @@ private:
         return i < node.entries.size() && !comp_(key, node.entries[i].first);
     }
 
-    /**
-     * Localiza a entrada da chave. Retorna ponteiro mutável mesmo em método
-     * const porque é um detalhe interno: quem expõe ao usuário (search)
-     * só lê, e update() é o único que escreve.
-     */
-    value_type* locate(const Key& key) const {
-        Node* current = root_.get();
-        while (current != nullptr) {
-            const std::size_t i = lower_index(*current, key);
-            if (matches_at(*current, i, key)) {
-                return &current->entries[i];
+    std::optional<Location> locate(const Key& key) const {
+        PageId page_id = storage_.getRootPageId();
+        while (page_id != kNullPageId) {
+            Node node = load_node(page_id);
+            const std::size_t i = lower_index(node, key);
+            if (matches_at(node, i, key)) {
+                return Location{std::move(node), i};
             }
-            if (current->leaf) {
-                return nullptr;
+            if (node.leaf) {
+                return std::nullopt;
             }
-            current = current->children[i].get();
+            page_id = node.children[i];
         }
-        return nullptr;
+        return std::nullopt;
     }
 
-    static const value_type& min_entry(const Node& node) {
-        const Node* current = &node;
-        while (!current->leaf) {
-            current = current->children.front().get();
+    value_type min_entry(const Node& node) const {
+        if (node.leaf) {
+            return node.entries.front();
         }
-        return current->entries.front();
+        Node current = load_node(node.children.front());
+        while (!current.leaf) {
+            const PageId next = current.children.front();
+            current = load_node(next);
+        }
+        return current.entries.front();
     }
 
-    static const value_type& max_entry(const Node& node) {
-        const Node* current = &node;
-        while (!current->leaf) {
-            current = current->children.back().get();
+    value_type max_entry(const Node& node) const {
+        if (node.leaf) {
+            return node.entries.back();
         }
-        return current->entries.back();
+        Node current = load_node(node.children.back());
+        while (!current.leaf) {
+            const PageId next = current.children.back();
+            current = load_node(next);
+        }
+        return current.entries.back();
+    }
+
+    /** Libera recursivamente (pós-ordem) a página de um nó e de seus descendentes. */
+    void release_subtree(PageId page_id) {
+        const Node node = load_node(page_id);
+        if (!node.leaf) {
+            for (const PageId child_id : node.children) {
+                release_subtree(child_id);
+            }
+        }
+        storage_.freeNode(page_id);
     }
 
     // ------------------------------------------------------------------
@@ -314,52 +401,83 @@ private:
     // ------------------------------------------------------------------
 
     /**
-     * Divide o filho cheio parent.children[index] em dois nós com t-1 chaves
-     * cada, promovendo a chave mediana para o pai (que não pode estar cheio).
+     * Devolve a raiz pronta para receber uma inserção (nunca cheia),
+     * criando-a se a árvore estiver vazia ou dividindo-a se estiver cheia.
      */
-    void split_child(Node& parent, std::size_t index) {
-        Node& full_child = *parent.children[index];
-        auto right_sibling = std::make_unique<Node>(full_child.leaf);
+    Node prepare_root_for_insertion() {
+        const PageId root_id = storage_.getRootPageId();
+
+        if (root_id == kNullPageId) {
+            Node root = create_node(true);
+            storage_.writeNode(root);
+            storage_.setRootPageId(root.pageId);
+            return root;
+        }
+
+        Node root = load_node(root_id);
+        if (!is_full(root)) {
+            return root;
+        }
+
+        Node new_root = create_node(false);
+        new_root.children.push_back(root.pageId);
+        split_child(new_root, 0, root);  // persiste new_root, a antiga raiz e o irmão
+        storage_.setRootPageId(new_root.pageId);
+        return new_root;
+    }
+
+    /**
+     * Divide o filho cheio `full_child` (= parent.children[index]) em dois nós
+     * com t-1 chaves, promovendo a mediana para `parent` (que não pode estar
+     * cheio). Persiste os três nós e devolve o novo irmão direito.
+     */
+    Node split_child(Node& parent, std::size_t index, Node& full_child) {
+        Node right = create_node(full_child.leaf);
 
         value_type median = std::move(full_child.entries[kMinDegree - 1]);
 
-        right_sibling->entries.assign(
+        right.entries.assign(
             std::make_move_iterator(full_child.entries.begin() + kMinDegree),
             std::make_move_iterator(full_child.entries.end()));
         full_child.entries.erase(full_child.entries.begin() + (kMinDegree - 1),
                                  full_child.entries.end());
 
         if (!full_child.leaf) {
-            right_sibling->children.assign(
-                std::make_move_iterator(full_child.children.begin() + kMinDegree),
-                std::make_move_iterator(full_child.children.end()));
+            right.children.assign(full_child.children.begin() + kMinDegree,
+                                  full_child.children.end());
             full_child.children.erase(full_child.children.begin() + kMinDegree,
                                       full_child.children.end());
         }
 
         parent.entries.insert(parent.entries.begin() + index, std::move(median));
-        parent.children.insert(parent.children.begin() + index + 1, std::move(right_sibling));
+        parent.children.insert(parent.children.begin() + index + 1, right.pageId);
+
+        // Ordem: o pai só passa a apontar para páginas que já foram escritas.
+        storage_.writeNode(right);
+        storage_.writeNode(full_child);
+        storage_.writeNode(parent);
+        return right;
     }
 
-    /** Insere em uma subárvore cuja raiz não está cheia (chave inédita). */
-    void insert_non_full(Node& root, value_type entry) {
-        Node* current = &root;
+    /** Insere em uma subárvore cuja raiz `node` não está cheia (chave inédita). */
+    void insert_non_full(Node node, value_type entry) {
+        while (!node.leaf) {
+            std::size_t i = lower_index(node, entry.first);
+            Node child = load_node(node.children[i]);
 
-        while (!current->leaf) {
-            std::size_t i = lower_index(*current, entry.first);
-
-            if (is_full(*current->children[i])) {
-                split_child(*current, i);
-                // A mediana subiu para current->entries[i]; decide o lado.
-                if (comp_(current->entries[i].first, entry.first)) {
-                    ++i;
+            if (is_full(child)) {
+                Node right = split_child(node, i, child);
+                // A mediana subiu para node.entries[i]; decide o lado.
+                if (comp_(node.entries[i].first, entry.first)) {
+                    child = std::move(right);
                 }
             }
-            current = current->children[i].get();
+            node = std::move(child);
         }
 
-        const std::size_t position = lower_index(*current, entry.first);
-        current->entries.insert(current->entries.begin() + position, std::move(entry));
+        const std::size_t position = lower_index(node, entry.first);
+        node.entries.insert(node.entries.begin() + position, std::move(entry));
+        storage_.writeNode(node);
     }
 
     // ------------------------------------------------------------------
@@ -367,16 +485,17 @@ private:
     // ------------------------------------------------------------------
 
     /**
-     * Remove a chave da subárvore de `node`. Pré-condição: `node` é a raiz
-     * ou possui ao menos t chaves, garantindo que a remoção não deixe um
-     * nó abaixo do mínimo.
+     * Remove a chave da subárvore de `node`, que é a cópia em memória
+     * autoritativa (atualizada in-place e persistida quando modificada).
+     * Pré-condição: `node` é a raiz ou possui ao menos t chaves.
      */
     bool remove_from(Node& node, const Key& key) {
-        std::size_t i = lower_index(node, key);
+        const std::size_t i = lower_index(node, key);
 
         if (matches_at(node, i, key)) {
             if (node.leaf) {
                 node.entries.erase(node.entries.begin() + i);
+                storage_.writeNode(node);
                 return true;
             }
             return remove_from_internal(node, i, key);
@@ -386,108 +505,129 @@ private:
             return false;
         }
 
-        if (node.children[i]->entries.size() < kMinDegree) {
-            i = fill_child(node, i);
+        Node child = load_node(node.children[i]);
+        if (child.entries.size() < kMinDegree) {
+            child = fill_child(node, i, std::move(child));
         }
-        return remove_from(*node.children[i], key);
+        return remove_from(child, key);
     }
 
     /** A chave está em node.entries[i], e `node` é interno. */
     bool remove_from_internal(Node& node, std::size_t i, const Key& key) {
-        Node& left  = *node.children[i];
-        Node& right = *node.children[i + 1];
+        Node left = load_node(node.children[i]);
 
         if (left.entries.size() >= kMinDegree) {
             // Substitui pelo predecessor e o remove da subárvore esquerda.
             // A cópia é necessária: a entrada original será apagada da folha.
-            value_type predecessor = max_entry(left);
+            const value_type predecessor = max_entry(left);
             node.entries[i] = predecessor;
+            storage_.writeNode(node);
             return remove_from(left, predecessor.first);
         }
 
+        Node right = load_node(node.children[i + 1]);
+
         if (right.entries.size() >= kMinDegree) {
-            value_type successor = min_entry(right);
+            const value_type successor = min_entry(right);
             node.entries[i] = successor;
+            storage_.writeNode(node);
             return remove_from(right, successor.first);
         }
 
         // Ambos os filhos estão no mínimo: funde-os (a chave desce para o
         // nó fundido) e continua a remoção ali.
-        merge_children(node, i);
-        return remove_from(*node.children[i], key);
+        merge_children(node, i, left, right);
+        return remove_from(left, key);
     }
 
     /**
-     * Garante que node.children[i] tenha ao menos t chaves, emprestando de um
-     * irmão ou fundindo com ele. Retorna o índice do filho que passou a
-     * cobrir o intervalo original (muda quando funde com o irmão anterior).
+     * Garante que `child` (= parent.children[i]) tenha ao menos t chaves,
+     * emprestando de um irmão ou fundindo com ele. Devolve o nó que passou a
+     * cobrir o intervalo original (é o irmão esquerdo quando a fusão ocorre
+     * com ele). Todos os nós modificados são persistidos.
      */
-    std::size_t fill_child(Node& node, std::size_t i) {
-        if (i > 0 && node.children[i - 1]->entries.size() >= kMinDegree) {
-            borrow_from_previous(node, i);
-            return i;
+    Node fill_child(Node& parent, std::size_t i, Node child) {
+        if (i > 0) {
+            Node left = load_node(parent.children[i - 1]);
+            if (left.entries.size() >= kMinDegree) {
+                borrow_from_previous(parent, i, child, left);
+                return child;
+            }
+            if (i == parent.entries.size()) {
+                // Último filho: só existe irmão à esquerda.
+                merge_children(parent, i - 1, left, child);
+                return left;
+            }
         }
-        if (i < node.entries.size() && node.children[i + 1]->entries.size() >= kMinDegree) {
-            borrow_from_next(node, i);
-            return i;
+
+        Node right = load_node(parent.children[i + 1]);
+        if (right.entries.size() >= kMinDegree) {
+            borrow_from_next(parent, i, child, right);
+            return child;
         }
-        if (i < node.entries.size()) {
-            merge_children(node, i);
-            return i;
-        }
-        merge_children(node, i - 1);
-        return i - 1;
+        merge_children(parent, i, child, right);
+        return child;
     }
 
     /** Rotação à direita: a última chave do irmão esquerdo sobe e a do pai desce. */
-    void borrow_from_previous(Node& parent, std::size_t i) {
-        Node& child   = *parent.children[i];
-        Node& sibling = *parent.children[i - 1];
-
+    void borrow_from_previous(Node& parent, std::size_t i, Node& child, Node& sibling) {
         child.entries.insert(child.entries.begin(), std::move(parent.entries[i - 1]));
         if (!child.leaf) {
-            child.children.insert(child.children.begin(), std::move(sibling.children.back()));
+            child.children.insert(child.children.begin(), sibling.children.back());
             sibling.children.pop_back();
         }
 
         parent.entries[i - 1] = std::move(sibling.entries.back());
         sibling.entries.pop_back();
+
+        storage_.writeNode(child);
+        storage_.writeNode(sibling);
+        storage_.writeNode(parent);
     }
 
     /** Rotação à esquerda: a primeira chave do irmão direito sobe e a do pai desce. */
-    void borrow_from_next(Node& parent, std::size_t i) {
-        Node& child   = *parent.children[i];
-        Node& sibling = *parent.children[i + 1];
-
+    void borrow_from_next(Node& parent, std::size_t i, Node& child, Node& sibling) {
         child.entries.push_back(std::move(parent.entries[i]));
         if (!child.leaf) {
-            child.children.push_back(std::move(sibling.children.front()));
+            child.children.push_back(sibling.children.front());
             sibling.children.erase(sibling.children.begin());
         }
 
         parent.entries[i] = std::move(sibling.entries.front());
         sibling.entries.erase(sibling.entries.begin());
+
+        storage_.writeNode(child);
+        storage_.writeNode(sibling);
+        storage_.writeNode(parent);
     }
 
     /**
-     * Funde children[i + 1] e a chave separadora entries[i] em children[i].
-     * Ambos os filhos têm t-1 chaves, então o resultado tem 2t-1.
+     * Funde `right` e a chave separadora parent.entries[i] em `left`
+     * (= parent.children[i]). Ambos têm t-1 chaves, então o resultado tem 2t-1.
+     * A página de `right` é liberada depois que pai e `left` foram persistidos.
      */
-    void merge_children(Node& parent, std::size_t i) {
-        Node& left = *parent.children[i];
-        std::unique_ptr<Node> right = std::move(parent.children[i + 1]);
-
+    void merge_children(Node& parent, std::size_t i, Node& left, Node& right) {
         left.entries.push_back(std::move(parent.entries[i]));
-        std::move(right->entries.begin(), right->entries.end(),
+        std::move(right.entries.begin(), right.entries.end(),
                   std::back_inserter(left.entries));
 
         if (!left.leaf) {
-            std::move(right->children.begin(), right->children.end(),
-                      std::back_inserter(left.children));
+            left.children.insert(left.children.end(),
+                                 right.children.begin(), right.children.end());
         }
 
         parent.entries.erase(parent.entries.begin() + i);
         parent.children.erase(parent.children.begin() + i + 1);
+
+        storage_.writeNode(left);
+        storage_.writeNode(parent);
+        storage_.freeNode(right.pageId);
+    }
+
+    /** Raiz ficou sem chaves: a árvore encolhe um nível (ou fica vazia). */
+    void release_empty_root(const Node& root) {
+        storage_.setRootPageId(root.leaf ? kNullPageId : root.children.front());
+        storage_.freeNode(root.pageId);
     }
 
     // ------------------------------------------------------------------
@@ -503,7 +643,7 @@ private:
         // Pula todas as entradas (e subárvores) estritamente menores que lower.
         for (std::size_t i = lower_index(node, lower); i < count; ++i) {
             if (!node.leaf) {
-                collect_range(*node.children[i], lower, upper, out);
+                collect_range(load_node(node.children[i]), lower, upper, out);
             }
             if (comp_(upper, node.entries[i].first)) {
                 return;  // a partir daqui tudo é maior que upper
@@ -512,7 +652,7 @@ private:
         }
 
         if (!node.leaf) {
-            collect_range(*node.children[count], lower, upper, out);
+            collect_range(load_node(node.children[count]), lower, upper, out);
         }
     }
 
@@ -522,15 +662,17 @@ private:
 
         for (std::size_t i = 0; i < count; ++i) {
             if (!node.leaf) {
-                in_order_impl(*node.children[i], visit);
+                in_order_impl(load_node(node.children[i]), visit);
             }
             visit(node.entries[i].first, node.entries[i].second);
         }
 
         if (!node.leaf) {
-            in_order_impl(*node.children[count], visit);
+            in_order_impl(load_node(node.children[count]), visit);
         }
     }
 };
+
+}  // namespace BTree::Page 
 
 #endif  // STRUCTURES_BTRE_HPP

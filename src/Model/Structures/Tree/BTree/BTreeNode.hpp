@@ -39,7 +39,7 @@
 #include <string>
 #include <vector>
 
-namespace BTreeNode {
+namespace BTree {
 
 using KeyType = std::int64_t;
 using ValueType = std::int64_t;
@@ -400,6 +400,6 @@ inline BTreeNode deserializeNode(const std::vector<std::uint8_t>& bytes) {
     return deserializeNode(bytes.data(), bytes.size());
 }
 
-}  // namespace BTreeNode
+}  // namespace BTree
 
 #endif  // STRUCTURES_BTREE_NODE

@@ -1,3 +1,4 @@
+#ifndef STORAGE_PAGE_HPP
 #define STORAGE_PAGE_HPP
 
 // Page.hpp
@@ -306,3 +307,5 @@ private:
 };
 
 }  // namespace PageSystem
+
+#endif // STORAGE_PAGE_HPP

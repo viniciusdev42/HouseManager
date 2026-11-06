@@ -1,5 +1,5 @@
-#ifndef BTREE_HPP
-#define BTREE_HPP
+#ifndef STRUCTURES_B_TREE_HPP
+#define STRUCTURES_B_TREE_HPP
 
 #include <algorithm>
 #include <cstddef>
@@ -13,7 +13,7 @@
 #include <vector>
 
 #include "BTreeNode.hpp"  // formato do nó, validação e (des)serialização do nó
-#include "Page.hpp"       // unidade de armazenamento (página) e seus erros
+#include "src/Storage/Page/Page.hpp"       // unidade de armazenamento (página) e seus erros
 
 namespace BTree {
 
@@ -758,4 +758,4 @@ private:
 
 }  // namespace BTree
 
-#endif  // BTREE_HPP
+#endif  // STRUCTURES_B_TREE_HPP

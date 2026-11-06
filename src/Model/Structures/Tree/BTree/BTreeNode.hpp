@@ -400,6 +400,58 @@ inline BTreeNode deserializeNode(const std::vector<std::uint8_t>& bytes) {
     return deserializeNode(bytes.data(), bytes.size());
 }
 
+// ---------------------------------------------------------------------------
+// Leitura a partir de páginas de tamanho fixo
+// ---------------------------------------------------------------------------
+
+/**
+ * Descobre, apenas pelo cabeçalho, quantos bytes o nó serializado no início de
+ * `data` ocupa. Serve para páginas de tamanho fixo, em que o nó é seguido por
+ * bytes de preenchimento e, portanto, o checksum não está no fim do buffer.
+ * @throws NodeFormatError se o cabeçalho for inválido ou o buffer for menor
+ *         que o nó declarado.
+ */
+inline std::size_t serializedNodeSize(const std::uint8_t* data, std::size_t size) {
+    if (data == nullptr || size < detail::kHeaderSize + detail::kChecksumSize) {
+        throw NodeFormatError("Buffer pequeno demais para conter um nó.");
+    }
+
+    detail::ByteReader reader(data, size);
+    if (reader.readU32() != detail::kMagic) {
+        throw NodeFormatError("Magic number inválido: não é um nó de Árvore B.");
+    }
+    reader.readU16();                          // versão (validada em deserializeNode)
+    const std::uint8_t flags = reader.readU8();
+    reader.readU8();                           // reservado
+    reader.readU32();                          // minDegree
+    const std::uint64_t keyCount = reader.readU32();
+
+    // Em 64 bits não há overflow: keyCount < 2^32 e cada item tem 8 bytes.
+    const bool isLeaf = (flags & detail::kFlagLeaf) != 0;
+    std::uint64_t total = detail::kHeaderSize
+                        + keyCount * (sizeof(KeyType) + sizeof(ValueType))
+                        + detail::kChecksumSize;
+    if (!isLeaf) {
+        total += (keyCount + 1) * sizeof(PageId);
+    }
+
+    if (total > size) {
+        throw NodeFormatError("Buffer menor que o nó declarado no cabeçalho.");
+    }
+    return static_cast<std::size_t>(total);
+}
+
+/**
+ * Como deserializeNode, mas ignora bytes de preenchimento após o nó. O
+ * checksum e a validação estrutural continuam sendo aplicados ao nó inteiro.
+ */
+inline BTreeNode deserializeNodeFromPage(const std::uint8_t* data, std::size_t size) {
+    return deserializeNode(data, serializedNodeSize(data, size));
+}
+
+inline BTreeNode deserializeNodeFromPage(const std::vector<std::uint8_t>& bytes) {
+    return deserializeNodeFromPage(bytes.data(), bytes.size());
+}
 }  // namespace BTree
 
 #endif  // STRUCTURES_BTREE_NODE

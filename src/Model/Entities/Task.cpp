@@ -1,126 +1,193 @@
-#include "Model/Entities/Task.hpp"
+#include "Task.hpp"
 
 #include <stdexcept>
+#include <string>
 #include <utility>
 
-namespace Entities::Task {
+namespace Task {
 
-namespace {
+// ---------------------------------------------------------------------------
+// TaskId
+// ---------------------------------------------------------------------------
 
-constexpr const char* kWhitespace = " \t\n\r\f\v";
-
-/// Remove espaços em branco das extremidades da string.
-std::string trim(const std::string& text) {
-    const auto first = text.find_first_not_of(kWhitespace);
-    if (first == std::string::npos) {
-        return {};
-    }
-    const auto last = text.find_last_not_of(kWhitespace);
-    return text.substr(first, last - first + 1);
-}
-
-void validateId(TaskId id) {
-    if (id == Task::kInvalidId) {
-        throw std::invalid_argument("O ID deve ser diferente de zero.");
+TaskId::TaskId(std::string value) : value_(std::move(value)) {
+    if (value_.empty()) {
+        throw std::invalid_argument("O ID da tarefa não pode ser vazio.");
     }
 }
 
-/// Normaliza (trim) e valida o título, retornando o valor a ser armazenado.
-std::string normalizeTitle(const std::string& rawTitle) {
-    std::string title = trim(rawTitle);
-    if (title.empty()) {
-        throw std::invalid_argument("O titulo nao pode ser vazio.");
-    }
-    if (title.size() > Task::kMaxTitleLength) {
-        throw std::invalid_argument("O titulo excede o tamanho maximo permitido.");
-    }
-    return title;
+const std::string& TaskId::value() const noexcept { return value_; }
+
+bool TaskId::operator==(const TaskId& other) const noexcept {
+    return value_ == other.value_;
 }
 
-void validateDescription(const std::string& description) {
-    if (description.size() > Task::kMaxDescriptionLength) {
-        throw std::invalid_argument("A descricao excede o tamanho maximo permitido.");
-    }
+bool TaskId::operator!=(const TaskId& other) const noexcept {
+    return !(*this == other);
 }
 
-void validatePriority(Priority priority) {
-    if (priority < Priority::Low || priority > Priority::Critical) {
-        throw std::invalid_argument("Prioridade invalida.");
-    }
+bool TaskId::operator<(const TaskId& other) const noexcept {
+    return value_ < other.value_;
 }
 
-void validateStatus(Status status) {
-    if (status < Status::Pending || status > Status::Completed) {
-        throw std::invalid_argument("Estado invalido.");
-    }
-}
-
-}  // namespace
-
-std::string_view toString(Priority priority) noexcept {
-    switch (priority) {
-        case Priority::Low:      return "Low";
-        case Priority::Medium:   return "Medium";
-        case Priority::High:     return "High";
-        case Priority::Critical: return "Critical";
-    }
-    return "Unknown";
-}
-
-std::string_view toString(Status status) noexcept {
-    switch (status) {
-        case Status::Pending:    return "Pending";
-        case Status::InProgress: return "InProgress";
-        case Status::Completed:  return "Completed";
-    }
-    return "Unknown";
-}
+// ---------------------------------------------------------------------------
+// Task
+// ---------------------------------------------------------------------------
 
 Task::Task(TaskId id,
            std::string title,
            std::string description,
            Priority priority,
-           std::optional<TimePoint> deadline,
-           Status status)
-    : id_(id), priority_(priority), deadline_(deadline), status_(status) {
-    validateId(id);
-    validatePriority(priority);
-    validateStatus(status);
-    title_ = normalizeTitle(title);
-    validateDescription(description);
-    description_ = std::move(description);
+           TimePoint deadline,
+           TimePoint createdAt)
+    : id_(std::move(id)),
+      title_(std::move(title)),
+      description_(std::move(description)),
+      priority_(priority),
+      deadline_(deadline),
+      status_(Status::Pending),
+      createdAt_(createdAt),
+      completedAt_(std::nullopt) {}
+
+Task Task::create(TaskId id,
+                  std::string title,
+                  std::string description,
+                  Priority priority,
+                  TimePoint deadline,
+                  TimePoint createdAt) {
+    if (title.empty()) {
+        throw std::invalid_argument("O título de uma tarefa não pode ser vazio.");
+    }
+    ensureDeadlineNotBefore(deadline, createdAt);
+
+    return Task(std::move(id),
+                std::move(title),
+                std::move(description),
+                priority,
+                deadline,
+                createdAt);
 }
 
-void Task::setTitle(std::string title) {
-    // Valida antes de modificar: garantia forte de exceção.
-    title_ = normalizeTitle(title);
+void Task::start() {
+    if (status_ != Status::Pending) {
+        throw std::logic_error(
+            "Só tarefas pendentes podem ser iniciadas.");
+    }
+    status_ = Status::inProgress;
 }
 
-void Task::setDescription(std::string description) {
-    validateDescription(description);
-    description_ = std::move(description);
-}
-
-void Task::setPriority(Priority priority) {
-    validatePriority(priority);
-    priority_ = priority;
-}
-
-void Task::setDeadline(TimePoint deadline) noexcept {
-    deadline_ = deadline;
-}
-
-void Task::clearDeadline() noexcept {
-    deadline_.reset();
-}
-
-void Task::setStatus(Status status) {
-    validateStatus(status);
-    status_ = status;
-}
-
-void Task::markAsCompleted() noexcept {
+void Task::complete(TimePoint now) {
+    if (status_ == Status::Completed) {
+        throw std::logic_error("A tarefa já está concluída.");
+    }
+    if (now < createdAt_) {
+        throw std::invalid_argument(
+            "A conclusão de uma tarefa não pode ser anterior à sua criação.");
+    }
     status_ = Status::Completed;
+    completedAt_ = now;
 }
 
-}  // namespace Entities::Task
+void Task::updateName(std::string newName) {
+    ensureNotCompleted("alterar o nome");
+    if (newName.empty()) {
+        throw std::invalid_argument("O nome de uma tarefa não pode estar vazio.");
+    }
+    title_ = std::move(newName);
+}
+
+void Task::updateDescription(std::string newDescription) {
+    ensureNotCompleted("Alterar a descrição");
+    description_ = std::move(newDescription);
+}
+
+void Task::updatePriority(Priority newPriority) {
+    ensureNotCompleted("Alterar a prioridade");
+    priority_ = newPriority;
+}
+
+void Task::updateDeadline(TimePoint newDeadline) {
+    ensureNotCompleted("alterar o prazo");
+    ensureDeadlineNotBefore(newDeadline, createdAt_);
+    deadline_ = newDeadline;
+}
+
+bool Task::isCompleted() const noexcept {
+    return status_ == Status::completed;
+}
+
+bool Task::isPending() const noexcept {
+    return status_ == Status::pending;
+}
+
+bool Task::isOverdue(TimePoint now) const noexcept {
+    return !isCompleted() && now > deadline_;
+}
+
+const TaskId& Task::id() const noexcept { return id_; }
+
+const std::string& Task::title() const noexcept { return title_; }
+
+const std::string& Task::description() const noexcept { return description_; }
+
+Priority Task::priority() const noexcept { return priority_; }
+
+Task::TimePoint Task::deadline() const noexcept { return deadline_; }
+
+Status Task::status() const noexcept { return status_; }
+
+Task::TimePoint Task::createdAt() const noexcept { return createdAt_; }
+
+std::optional<Task::TimePoint> Task::completedAt() const noexcept {
+    return completedAt_;
+}
+
+bool Task::operator==(const Task& other) const noexcept {
+    return id_ == other.id_;
+}
+
+bool Task::operator!=(const Task& other) const noexcept {
+    return !(*this == other);
+}
+
+void Task::ensureNotCompleted(const char* operation) const {
+    if (isCompleted()) {
+        throw std::logic_error(std::string("Não é possível ") +
+                               operation + " de uma tarefa concluída.");
+    }
+}
+
+void Task::ensureDeadlineNotBefore(TimePoint deadline, TimePoint createdAt) {
+    if (deadline < createdAt) {
+        throw std::invalid_argument(
+            "O prazo de uma tarefa não pode ser anterior à data de sua criação.");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// TaskUrgencyComparator
+// ---------------------------------------------------------------------------
+
+bool TaskUrgencyComparator::operator()(const Task& a,
+                                       const Task& b) const noexcept {
+    // 1. Prioridade: o enum é declarado de Low a Critical, então o maior
+    //    valor representa a maior prioridade.
+    if (a.priority() != b.priority()) {
+        return static_cast<int>(a.priority()) > static_cast<int>(b.priority());
+    }
+
+    // 2. Prazo: o mais próximo é mais urgente.
+    if (a.deadline() != b.deadline()) {
+        return a.deadline() < b.deadline();
+    }
+
+    // 3. Data de criação: a mais antiga espera há mais tempo.
+    if (a.createdAt() != b.createdAt()) {
+        return a.createdAt() < b.createdAt();
+    }
+
+    // 4. Desempate final pela identidade, garantindo ordem total.
+    return a.id() < b.id();
+}
+
+}  // namespace Task
